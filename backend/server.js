@@ -12,8 +12,9 @@ app.use(cors({
     'http://localhost:3000',
     'http://localhost:3001',
     'http://localhost:5173',
-    process.env.FRONTEND_URL // We'll add this in Render environment variables
-  ],
+    process.env.FRONTEND_URL,
+    'https://smart-code-evaluator-frontend.vercel.app'
+  ].filter(Boolean),
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
