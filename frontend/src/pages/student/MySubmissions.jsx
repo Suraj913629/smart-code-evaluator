@@ -1,0 +1,271 @@
+import React, { useEffect, useState } from 'react'
+import Navbar from '../../components/Navbar'
+import api from '../../services/api'
+import { toast } from 'react-toastify'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import { useAuth } from '../../context/AuthContext'
+import jsPDF from 'jspdf'
+
+const MySubmissions = () => {
+  const { user } = useAuth()
+  const [submissions, setSubmissions] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => { fetchSubmissions() }, [])
+
+  const fetchSubmissions = async () => {
+    try {
+      const res = await api.get('/submissions/my')
+      setSubmissions(res.data.submissions)
+    } catch (error) {
+      toast.error('Failed to load submissions')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const generatePDF = (sub) => {
+    try {
+      const doc = new jsPDF()
+      const ev = sub.evaluation
+
+      // Header
+      doc.setFillColor(79, 70, 229)
+      doc.rect(0, 0, 210, 30, 'F')
+      doc.setTextColor(255, 255, 255)
+      doc.setFontSize(18)
+      doc.setFont('helvetica', 'bold')
+      doc.text('CodeEval - Submission Report', 14, 18)
+
+      // Reset color
+      doc.setTextColor(0, 0, 0)
+
+      // Student Info
+      doc.setFontSize(11)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Student Information', 14, 42)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(10)
+      doc.text(`Name: ${user?.name}`, 14, 52)
+      doc.text(`Email: ${user?.email}`, 14, 59)
+      doc.text(`Batch: ${user?.batch}`, 14, 66)
+      doc.text(`Assignment: ${sub.assignmentId?.title || 'N/A'}`, 14, 73)
+      doc.text(`Submitted: ${new Date(sub.submittedAt).toLocaleString()}`, 14, 80)
+      doc.text(`Version: ${sub.version}`, 14, 87)
+
+      // Divider
+      doc.setDrawColor(200, 200, 200)
+      doc.line(14, 93, 196, 93)
+
+      // Evaluation Results
+      doc.setFontSize(11)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Evaluation Results', 14, 103)
+
+      // Status badge
+      if (ev?.status === 'CORRECT') {
+        doc.setFillColor(220, 252, 231)
+        doc.setTextColor(22, 163, 74)
+      } else {
+        doc.setFillColor(254, 226, 226)
+        doc.setTextColor(220, 38, 38)
+      }
+      doc.roundedRect(14, 108, 40, 10, 2, 2, 'F')
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'bold')
+      doc.text(ev?.status || 'N/A', 17, 115)
+
+      // Score and Grade
+      doc.setTextColor(0, 0, 0)
+      doc.setFontSize(10)
+      doc.setFont('helvetica', 'normal')
+      doc.text(`Quality Score: ${ev?.score || 0}/100`, 14, 128)
+      doc.text(`Grade: ${ev?.grade || 'N/A'}`, 14, 135)
+      doc.text(`Tests Passed: ${ev?.testResults?.passed || 0}/${ev?.testResults?.total || 0}`, 14, 142)
+
+      // Divider
+      doc.line(14, 148, 196, 148)
+
+      // Quality Metrics
+      doc.setFontSize(11)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Code Quality Metrics', 14, 158)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(10)
+
+      const metrics = ev?.qualityMetrics || {}
+      const metricLabels = {
+        loc: 'Lines of Code',
+        complexity: 'Cyclomatic Complexity',
+        commentDensity: 'Comment Density (%)',
+        duplication: 'Duplication (%)',
+        functionLength: 'Max Function Length',
+        ifElseDepth: 'Max Nesting Depth',
+        loops: 'Number of Loops'
+      }
+
+      let yPos = 168
+      Object.entries(metricLabels).forEach(([key, label]) => {
+        doc.text(`${label}: ${metrics[key] || 0}`, 14, yPos)
+        yPos += 7
+      })
+
+      // Divider
+      doc.line(14, yPos + 2, 196, yPos + 2)
+      yPos += 12
+
+      // Violations
+      if (ev?.violations?.length > 0) {
+        doc.setFontSize(11)
+        doc.setFont('helvetica', 'bold')
+        doc.text(`Violations (${ev.violations.length})`, 14, yPos)
+        doc.setFont('helvetica', 'normal')
+        doc.setFontSize(9)
+        yPos += 10
+
+        ev.violations.forEach((v) => {
+          if (yPos > 270) {
+            doc.addPage()
+            yPos = 20
+          }
+          doc.setTextColor(180, 50, 50)
+          doc.text(`[${v.severity}] ${v.message}`, 14, yPos)
+          doc.setTextColor(0, 0, 0)
+          yPos += 7
+        })
+        yPos += 5
+      }
+
+      // Suggestions
+      if (ev?.suggestions?.length > 0) {
+        if (yPos > 250) { doc.addPage(); yPos = 20 }
+        doc.setFontSize(11)
+        doc.setFont('helvetica', 'bold')
+        doc.setTextColor(0, 0, 0)
+        doc.text('Suggestions', 14, yPos)
+        doc.setFont('helvetica', 'normal')
+        doc.setFontSize(9)
+        yPos += 10
+
+        ev.suggestions.forEach((s) => {
+          if (yPos > 270) { doc.addPage(); yPos = 20 }
+          const lines = doc.splitTextToSize(`• ${s}`, 180)
+          doc.text(lines, 14, yPos)
+          yPos += lines.length * 6 + 2
+        })
+      }
+
+      // Footer
+      doc.setFontSize(8)
+      doc.setTextColor(150, 150, 150)
+      doc.text(`Generated by CodeEval Platform | ${new Date().toLocaleString()}`, 14, 290)
+
+      // Save
+      const filename = `report_${sub.assignmentId?.title?.replace(/\s+/g, '_') || 'submission'}_v${sub.version}.pdf`
+      doc.save(filename)
+      toast.success('PDF downloaded!')
+    } catch (error) {
+      console.error('PDF error:', error)
+      toast.error('Failed to generate PDF')
+    }
+  }
+
+  const chartData = submissions.filter(s => s.evaluation).map((s, i) => ({
+    name: `#${i + 1}`,
+    score: s.evaluation.score,
+    date: new Date(s.submittedAt).toLocaleDateString()
+  })).reverse()
+
+  const gradeColor = { A: 'text-green-600', B: 'text-blue-600', C: 'text-yellow-600', D: 'text-orange-600', F: 'text-red-600' }
+  const gradeBg = { A: 'bg-green-100', B: 'bg-blue-100', C: 'bg-yellow-100', D: 'bg-orange-100', F: 'bg-red-100' }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Navbar />
+      <div className="max-w-6xl mx-auto px-4 py-8">
+        <h1 className="text-2xl font-bold text-gray-800 mb-6">My Submission History</h1>
+
+        {chartData.length > 1 && (
+          <div className="bg-white rounded-xl shadow-sm p-5 mb-6">
+            <h2 className="font-semibold text-gray-700 mb-4">Quality Score Progress</h2>
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 12 }} />
+                <Tooltip formatter={(val) => [`${val}`, 'Score']} />
+                <Line type="monotone" dataKey="score" stroke="#6366f1" strokeWidth={2} dot={{ r: 4 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="text-center py-12">
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mx-auto mb-3"></div>
+          </div>
+        ) : submissions.length === 0 ? (
+          <div className="bg-white rounded-xl p-12 text-center shadow-sm">
+            <p className="text-4xl mb-3">📭</p>
+            <p className="text-gray-500">No submissions yet.</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {submissions.map((sub) => (
+              <div key={sub._id} className="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="font-semibold text-gray-800">{sub.assignmentId?.title || 'Unknown'}</h3>
+                      <span className="text-xs bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded-full">v{sub.version}</span>
+                      {sub.isLate && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full">Late</span>}
+                    </div>
+                    <p className="text-xs text-gray-400">Submitted: {new Date(sub.submittedAt).toLocaleString()} · Language: {sub.language}</p>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    {sub.evaluation && (
+                      <>
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${gradeBg[sub.evaluation.grade]} ${gradeColor[sub.evaluation.grade]}`}>
+                          {sub.evaluation.grade}
+                        </div>
+                        <div>
+                          <p className="font-bold text-gray-800">{sub.evaluation.score}/100</p>
+                          <p className={`text-xs font-medium ${sub.evaluation.status === 'CORRECT' ? 'text-green-600' : 'text-red-600'}`}>
+                            {sub.evaluation.status}
+                          </p>
+                        </div>
+                      </>
+                    )}
+                    {sub.evaluation && (
+                      <button
+                        onClick={() => generatePDF(sub)}
+                        className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                      >
+                        📄 PDF
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {sub.evaluation && (
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                    <span className="bg-gray-100 px-2 py-1 rounded">LOC: {sub.evaluation.qualityMetrics?.loc}</span>
+                    <span className="bg-gray-100 px-2 py-1 rounded">Complexity: {sub.evaluation.qualityMetrics?.complexity}</span>
+                    <span className="bg-gray-100 px-2 py-1 rounded">Comments: {sub.evaluation.qualityMetrics?.commentDensity}%</span>
+                    <span className="bg-gray-100 px-2 py-1 rounded">Tests: {sub.evaluation.testResults?.passed}/{sub.evaluation.testResults?.total}</span>
+                    {sub.evaluation.violations?.length > 0 && (
+                      <span className="bg-red-100 text-red-600 px-2 py-1 rounded">{sub.evaluation.violations.length} violation(s)</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export default MySubmissions
